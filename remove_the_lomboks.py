@@ -11,15 +11,19 @@ index_package = 1
 index_imports = 2
 index_class_annotations = 3
 file_info_dict = {} # 查询字典：file_path：[class_name, package, imports[], class_annotations[]]
-save_modification = True
+save_modification = False
+MAX_TOTAL_COUNT = -1 # 处理的文件数上限（可能会超过一点），负数表示无上限
+FILE_LOG = True
+time_str = time.strftime('%Y-%m-%d_%H_%M_%S', time.localtime())
+LOG_FILE_NAME = 'remove_lomboks_' + time_str + '.log'
 
 def log(log_str):
-    # time_str = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime()) + ": "
-    time_str = ''
+    time_str = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime()) + ": "
+    # time_str = ''
     print(time_str + str(log_str))
-    # file_name = 'remove_lomboks.log'
-    # with open(file_name,'a') as file_object:
-    #     file_object.write(time_str + ": " + log_str + "\n")
+    if FILE_LOG:
+        with open(LOG_FILE_NAME, 'a') as file_object:
+            file_object.write(time_str + log_str + "\n")
 
 # 获取指定路径下所有filter过滤后的文件
 def all_filtered_files(dirname, filter):
@@ -68,7 +72,7 @@ def all_filtered_files(dirname, filter):
 
 # 返回class_name, package, imports[], class_annotations[]
 def get_class_info(src_file):
-    # print("get_class_info: --> " + src_file)
+    log("get_class_info: --> " + src_file)
     f = open(src_file)         # 返回一个文件对象  
     line = f.readline()        # 调用文件的 readline()方法  
     line_num = 0
@@ -90,7 +94,11 @@ def get_class_info(src_file):
             package = line[package_start : package_end]
         elif line.startswith(key_import):
             import_start = line.index(key_import) + len(key_import)
-            import_end = line.rindex(";")
+            import_end = line.rfind(";")
+            if import_end < 0: # 换行了
+                next_line = f.readline().strip()
+                line = line.replace("\n", "").rstrip() + next_line # 拼接
+                import_end = len(line)
             imports.append(line[import_start : import_end])
         elif line.startswith(key_annotation):
             annotation_start = line.index(key_annotation) + len(key_annotation)
@@ -175,15 +183,18 @@ def process_lombok_file(lombok_file, save_modification):
     setter_prefix = "set"
     for line in content:
         line_num += 1
-        if line.find("lombok.Data") >= 0 or line.find("@Data") >= 0: # 删掉import和@Data的行
+        # 删掉import和@Data的行
+        if line.find("lombok.Data") >= 0 or line.find("@Data") >= 0: 
             # 跳过这一行，相当于删除
             # print("process_lombok_file: --> remove")
             continue
-        elif line.find("private ") >= 0: # 替换private为public
+        # 替换private为public
+        elif line.find("private ") >= 0: 
             line = line.replace("private ", "public ")
             # print("process_lombok_file: --> replace private: " + line)
             content_new += line
-        elif line.startswith(setter_prefix) or line.find(" " + setter_prefix) >= 0: # 将调用本类的setXxx(...)都替换为this.xxx = ... 
+        # 将调用本类的setXxx(...)都替换为this.xxx = ... 
+        elif (line.startswith(setter_prefix) or line.find(" " + setter_prefix) >= 0) and line[line.find(setter_prefix) + len(setter_prefix)].isalpha(): 
             line = replace_setter(line, line_num, None, setter_prefix)
             content_new += line
         else:
@@ -249,7 +260,8 @@ def find_declaration_end(line, var_start, end):
         return -1
 
 # 处理引用lombok的文件
-def process_lombok_referred_file(class_name, import_path, ref_file, save_modification):
+# @param is_same_package 是否为同一个package下的，同一package不需要import
+def process_lombok_referred_file(class_name, import_path, is_same_package, ref_file, save_modification):
     log("process_lombok_referred_file: --> " + ref_file)
     f = open(ref_file)      # 返回一个文件对象  
     content = f.readlines() # 修改前的文件内容
@@ -273,9 +285,11 @@ def process_lombok_referred_file(class_name, import_path, ref_file, save_modific
                     obj_list.append(obj_name) 
                     
     log("process_lombok_referred_file: --> obj_list = " + str(obj_list))
-    # 如果没有找到引用，直接删除import语句
+    # 如果没有找到引用，直接删除import语句，或结束
     if ref_count == 0:
-        log("process_lombok_referred_file: Info --> No reference found, remove import")
+        if is_same_package: # 同一package，没有引用，则不需要修改
+            return
+        log("process_lombok_referred_file: Info --> No reference found, remove import.")
         for line in content:
             if line.find(import_path) < 0:
                 content_new += line
@@ -285,7 +299,7 @@ def process_lombok_referred_file(class_name, import_path, ref_file, save_modific
         wf.close()
         return
     elif obj_list == []:
-        log("process_lombok_referred_file: Error --> No variable found while references are present, please check this file manually!")
+        log("process_lombok_referred_file: Info --> No variable found while references are present.")
         return
     else:
         line_num = 0 # 行号
@@ -294,13 +308,19 @@ def process_lombok_referred_file(class_name, import_path, ref_file, save_modific
             for obj_name in obj_list:
                 # log("process_lombok_referred_file: ==> #" + str(line_num) + " " + line)
                 setter_prefix = "set"
+                obj_setter_prefix = obj_name + "." + setter_prefix
                 getter_prefix = "get"
+                obj_getter_prefix = obj_name + "." + getter_prefix
                 is_prefix = "is"
-                if line.find(obj_name + "." + setter_prefix) >= 0: # 将obj_name.setXxx(...)都替换为obj_name.xxx = ... 
+                obj_is_prefix = obj_name + "." + is_prefix
+                # 将obj_name.setXxx(...)都替换为obj_name.xxx = ... 
+                if line.find(obj_setter_prefix) >= 0 and line[line.find(obj_setter_prefix) + len(obj_setter_prefix)].isalpha(): 
                     line = replace_setter(line, line_num, obj_name, setter_prefix)
-                elif line.find(obj_name + "." + getter_prefix) >= 0: # 将obj_name.getXxx()都替换为obj_name.xxx
+                # 将obj_name.getXxx()都替换为obj_name.xxx
+                elif line.find(obj_getter_prefix) >= 0 and line[line.find(obj_getter_prefix) + len(obj_getter_prefix)].isalpha(): 
                     line = replace_getter(line, line_num, obj_name, getter_prefix)
-                elif line.find(obj_name + "." + is_prefix) >= 0: # 将obj_name.isXxx()都替换为obj_name.xxx
+                # 将obj_name.isXxx()都替换为obj_name.xxx
+                elif line.find(obj_is_prefix) >= 0 and line[line.find(obj_is_prefix) + len(obj_is_prefix)].isalpha(): 
                     line = replace_getter(line, line_num, obj_name, is_prefix)
             content_new += line    
 
@@ -313,7 +333,8 @@ def process_lombok_referred_file(class_name, import_path, ref_file, save_modific
 if __name__=='__main__':
     # 获取所有的java文件
     all_java_files = all_filtered_files(sys.argv[1], filter) # 从命令行接收一个输入作为路径，获取
-    log("main: --> All java files: \n" + list_str(all_java_files) + "\n")
+    # log("main: --> All java files: \n" + list_str(all_java_files) + "\n")
+    log("main: --> Scaned " + str(len(all_java_files)) + " java files.\n")
     
     # 初始化查询表
     for file in all_java_files:
@@ -323,10 +344,10 @@ if __name__=='__main__':
     
     # all_lombok_files = all_files_contains_key(all_java_files, "lombok.Data", "class ")
     all_lombok_files = all_files_have_value_in_type(file_info_dict, index_imports, "lombok.Data")
-    log("main: --> All lombok files: \n" + list_str(all_lombok_files) + "\n")
+    # log("main: --> All lombok files: \n" + list_str(all_lombok_files) + "\n")
+    log("main: --> Scaned " + str(len(all_lombok_files)) + " lombok files.\n")
     
     total_count = 0 # 处理的总文件数
-    MAX_TOTAL_COUNT = 3
     for lombok_file in all_lombok_files:
         # 处理有引用lombok文件的文件
         # class_name, import_path = find_full_path(lombok_file)
@@ -341,12 +362,15 @@ if __name__=='__main__':
         # 和lombok文件处于同一package的文件
         files_of_same_package = all_files_have_value_in_type(file_info_dict, index_package, package)
         files_of_same_package.remove(lombok_file)
-        log("main: --> All files that in the same package \"" + package + "\":\n" + list_str(files_of_same_package))
+        log("main: --> All files that in the same package as \"" + import_path + "\":\n" + list_str(files_of_same_package))
 
         count = 0
-        files_import_lombok_file.extend(files_of_same_package)
         for lombok_referred_file in files_import_lombok_file:
-            process_lombok_referred_file(class_name, import_path, lombok_referred_file, save_modification=save_modification)
+            process_lombok_referred_file(class_name, import_path, is_same_package=False, ref_file=lombok_referred_file, save_modification=save_modification)
+            count = count + 1
+            total_count += 1
+        for lombok_referred_file in files_of_same_package:
+            process_lombok_referred_file(class_name, import_path, is_same_package=True, ref_file=lombok_referred_file, save_modification=save_modification)
             count = count + 1
             total_count += 1
         log("main: --> Finish process " + str(count) + " file(s) that refer " + lombok_file + "\n")
@@ -358,3 +382,4 @@ if __name__=='__main__':
         if MAX_TOTAL_COUNT > 0 and total_count >= MAX_TOTAL_COUNT:
             log("main: --> Done processing " + str(total_count) + " files.\n")
             exit(0)
+    log("main: --> Done processing " + str(total_count) + " files.\n")
