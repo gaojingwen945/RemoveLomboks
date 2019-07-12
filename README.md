@@ -1,6 +1,8 @@
 # RemoveLomboks
 
 > 项目运行环境：python 3.6
+>
+> 调用示例：python3 remove_the_lomboks.py lombok_test_dir
 
 目前我们的Android工程中引用的org.projectlombok:lombok库（主要用于通过注解为data类自动生成getter/setter方法），对gradle build plugin 3.2.1+以上的kapt以及annotationProcessor支持都非常不友好，stackoverflow及github上都能找到相关的issue。
 
@@ -46,5 +48,5 @@
 
 4. @EqualsAndHashCode
 
-如果有其他类似的需求，也可以参考下这个实现，或者有其他更好的思路，也欢迎与我交流~
+> 如果有其他类似的需求，也可以参考下这个实现，或者有其他更好的思路，也欢迎与我交流~
 
