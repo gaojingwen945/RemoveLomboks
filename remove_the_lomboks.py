@@ -82,138 +82,6 @@ def all_filtered_files(dirname, pass_filter, fail_filter):
 
     return result
 
-# 返回一个文件中定义的所有class的基本信息
-def parse_classes_in_file(src_file):
-    if DEBUG:
-        log("parse_classes_in_file: --> " + src_file)
-    f = open(src_file)         # 返回一个文件对象  
-    file_content = f.readlines()   
-    f.close()
-
-    classes = {} # class_name : class_info[parent class，annotations[]，本class开始行号，本class结束行号]
-    line_num = 0
-    package = ''
-    imports = []
-    key_package = "package "
-    key_import = "import "
-    counting_open_left_braces = [] # 当前文件中未结束的左大括号行号
-    class_names = [] # 所有未结束的class_name
-    cur_class = '' # 当前未结束的class_name
-    cur_annotations = [] # 当前未确认所属class的annotations
-    line_comment_start = -1
-    has_class_def = False
-    for line_index in range(0, len(file_content)):
-        line_num = line_index + 1
-        line = file_content[line_index]
-        if DEBUG:
-            log("==> #" + str(line_num) + " " + line)
-
-        if line.isspace(): # 空行
-            continue
-        elif line.find("/*") >= 0 and line.find("*/") < 0: # 注释块开始
-            line_comment_start = line_index
-            if DEBUG:
-                print("comment block start")
-            continue
-        elif line_comment_start >= 0 and line.find("*/") >= 0: # 注释块结束
-            line_comment_start = -1
-            if DEBUG:
-                print("comment block end")
-            continue
-        elif line_comment_start >= 0 or line.strip().startswith("//"): # 在注释块中 or 行注释
-            if DEBUG:
-                print("line comment")
-            continue
-
-        if line.startswith(key_package): # 解析包名
-            package_start = line.index(key_package) + len(key_package)
-            package_end = line.rindex(";")
-            package = line[package_start : package_end]
-        elif line.startswith(key_import): # 解析imports
-            import_start = line.index(key_import) + len(key_import)
-            import_end = line.rfind(";")
-            if import_end < 0: # 换行了
-                line_index += 1
-                next_line = file_content[line_index].strip()
-                line = line.replace("\n", "").rstrip() + next_line # 拼接
-                import_end = len(line)
-            imports.append(line[import_start : import_end])
-        else: 
-            line = get_effective_line(line)
-
-            # 解析annotation
-            if line.startswith("@"):
-                annotation = get_declaration_starting_from(line, 1)
-                cur_annotations.append(annotation)
-
-            # 解析classes
-            if line.startswith("class ") or line.find(" class ") >= 0: # 遇到class定义了
-                has_class_def = True
-                while line.find("{") < 0 and line_index < len(file_content) - 1: # 换行了
-                    line_index += 1
-                    next_line = file_content[line_index].strip()
-                    line = line.replace("\n", "").rstrip() + next_line # 拼接
-                if line.find("{") < 0: # 这不是一个class声明
-                    continue
-                cur_class = get_declaration_starting_from(line, line.find("class ") + len("class "))
-                if DEBUG:
-                    print("cur_class = " + str(cur_class))
-                if cur_class == None:
-                    continue
-                class_names.append(cur_class)
-                classes[cur_class] = ['', [], -1, -1]
-                classes[cur_class][classes_index_start_line_num] = line_num
-                # 之前未确认的annotation，就认为是本class的
-                classes[cur_class][classes_index_annotations] = cur_annotations 
-                cur_annotations = [] # 重置
-                index_extends = line.find(" extends ")
-                while index_extends > 0: # extends
-                    index_left_angle_bracket = line.find("<")
-                    index_right_angle_bracket = line.find(">")
-                    # 在<>内部的extends，不是用来修饰class的
-                    if index_left_angle_bracket < 0 or index_extends <= index_left_angle_bracket or (index_right_angle_bracket >= 0 and index_extends >= index_right_angle_bracket):
-                        parent_class = get_declaration_starting_from(line, index_extends + len(" extends "))
-                        if cur_class != '' and parent_class != None and parent_class != '':
-                            parent_import_path = parent_class
-                            if parent_class.find(".") < 0: # 查找full_path
-                                parent_import_path = find_class_import(imports, parent_class)
-                                if parent_import_path == None: # 不在imports中，那就是同一package的
-                                    parent_import_path = package + "." + parent_class
-                            classes[cur_class][classes_index_parent_class] = parent_import_path
-                    index_extends = line.find(" extends ", index_extends + len(" extends "))
-            
-            # 查找匹配的花括号
-            pop_line_num, suc = handle_curly_braces(counting_open_left_braces, line, line_num)
-            if not suc:
-                log("parse_classes_in_file: Error --> handle_curly_braces failed with " + src_file)
-            if pop_line_num >= 0: # 找到匹配的}号
-                # 如果这个}匹配了当前class的结束
-                if cur_class != '' and pop_line_num == classes[cur_class][classes_index_start_line_num]:
-                    # 则把cur_class设为上一级class
-                    classes[cur_class][classes_index_end_line_num] = line_num 
-                    if cur_class in class_names:
-                        class_names.remove(cur_class)
-                    if len(class_names) > 0:
-                        cur_class = class_names.pop()
-                    else:
-                        cur_class = ''
-    
-    if has_class_def and len(classes) <= 0:
-        log("parse_classes_in_file: Warning --> No classes found in file: " + src_file)
-    if (package + "." + cur_class) in class_info_dict:
-        log("parse_classes_in_file: Warning --> This class already exists in dict: " + (package + "." + cur_class))
-        log(", current file: " + src_file)
-        log(", previously defined in file: " + class_info_dict[package + "." + cur_class][index_src_file])
-
-    # log("imports = " + list_str(imports))
-    file_info_dict[src_file] = [package, imports, classes]
-    for cur_class in classes:
-        # log("import_path = " + package + "." + cur_class)
-        # log("parent_class = " + classes[cur_class][classes_index_parent_class])
-        if DEBUG:
-            log("class_annotations = " + list_str(classes[cur_class][classes_index_annotations]))
-        class_info_dict[package + "." + cur_class] = [src_file, cur_class, package, classes[cur_class][classes_index_parent_class], imports, classes[cur_class][classes_index_annotations], classes[cur_class][classes_index_start_line_num], classes[cur_class][classes_index_end_line_num]]
-
 # 返回一行中的有效内容
 def get_effective_line(line):
     # if DEBUG:
@@ -303,73 +171,6 @@ def filter_dict_items(data_dict, filter_indices, filter_values):
 
 def is_valid_var_char(c):
     return c.isalnum() or c == '_'
-
-# 返回处理后的内容和下一个待处理的line_index
-# @param class_path 对象obj_name对应的类引用路径
-def process_line(class_path, content, line_index, obj_name):
-    line = content[line_index]
-    line_index += 1
-    # if DEBUG:
-    print("process_line: --> #" + str(line_index) + " line = " + line.replace("\n", "") + ", obj = " + str(obj_name))
-
-    if line.isspace(): # 空行
-        return line, line_index
-    while line.find(";") < 0 or line.find("{") < 0 or line.find("}") < 0: # 本行并未结束，拼接下一行
-        if line_index >= len(content):
-            print("process_line: --> #" + str(line_index) + " line = " + line + ", len(content) = " + str(len(content)))
-            break
-        line = line + content[line_index]
-        line_index += 1
-
-    if obj_name != None: # 对象引用
-        obj_len = len(obj_name)
-        start = 0
-        occurance = 0
-        while start < len(line): # 逐个查找匹配
-            occurance = line.find(obj_name, start)
-            if occurance < 0: # 没有引用
-                return line, line_index
-            if (occurance > 0 and is_valid_var_char(line[occurance - 1])) or (occurance + obj_len < len(line) and is_valid_var_char(line[occurance + obj_len])): # 非obj引用
-                start = occurance + obj_len # 查找下一个
-                continue
-            elif occurance + obj_len < len(line) - 1 and line[occurance + obj_len] == '.': # 确实是obj方法调用
-                function_call = get_declaration_starting_from(line, occurance + obj_len + 1)
-                line = process_function_call(class_path, line, obj_name, function_call, occurance)
-                start = occurance + obj_len # 查找下一个
-                continue
-            else: # 其他obj引用
-                start = occurance + obj_len # 查找下一个
-                continue
-    else: # 本类引用，由于没有找到调用本类getter方法的地方，所以目前只处理setter方法
-        tmp = line.strip()
-        if tmp.startswith("set"):
-            start_index = line.find("set")
-            function_call = get_declaration_starting_from(line, start_index)
-            line = process_function_call(class_path, line, obj_name, function_call, start_index)
-    return line, line_index
-
-def process_function_call(class_path, line, obj_name, function_call, start_index):
-    if DEBUG:
-        print("process_function_call: --> function_call = " + str(function_call))
-    if function_call.startswith("get"): # getter调用
-        property_name = get_corresponding_property_name(function_call, "get")
-        if is_property_defined_and_not_overwritten(class_path, property_name, function_call):
-            # 替换当前的这次getter调用
-            line = replace_next_getter_call(line, start_index, obj_name, property_name, function_call)
-    elif function_call.startswith("is"): # getter调用
-        property_name = get_corresponding_property_name(function_call, "is")
-        if is_property_defined_and_not_overwritten(class_path, property_name, function_call):
-            # 替换当前的这次getter调用
-            line = replace_next_getter_call(line, start_index, obj_name, property_name, function_call)
-    elif function_call.startswith("set"): # setter调用
-        property_name = get_corresponding_property_name(function_call, "set")
-        if is_property_defined_and_not_overwritten(class_path, property_name, function_call):
-            # 替换当前的这次setter调用
-            line = replace_next_setter_call(line, start_index, obj_name, property_name, function_call)
-    else:
-        if DEBUG:
-            print("process_function_call: --> no getter or setter call")
-    return line
 
 def get_corresponding_property_name(function_call, prefix):
     property_name = get_declaration_starting_from(function_call, len(prefix))
@@ -529,6 +330,251 @@ def is_inside_lombok_class(lombok_file, line_num):
             return class_name
     return None
 
+# 适用List的str()函数
+def list_str(obj):
+    result = ''
+    if isinstance(obj, list):
+        result += "["
+        index = 0
+        for item in obj:
+            result += str(index) + " " + list_str(item)
+            index += 1
+        result += "]"
+    else:
+        result += str(obj) + "\n"
+    return result
+
+# 查找变量声明结束的下标
+def find_declaration_end(line, var_start, end):
+    for var_end in range(var_start, end): # [var_start, end)
+        if not is_valid_var_char(line[var_end]):
+            return var_end
+    return end
+
+# 查找line中从下标var_start开始的变量/函数名（可能不是完整的变量or函数名，取决于var_start）
+def get_declaration_starting_from(line, var_start):
+    temp = line[var_start : len(line)].strip()
+    var_end = find_declaration_end(temp, 0, len(temp))
+    if var_end > 0:
+        return temp[0 : var_end].strip()
+    else:
+        return None
+
+# 查找变量声明开始的下标
+def find_declaration_start(line, start, var_end):
+    for var_start in range(var_end - 1, start - 1, -1): # [var_end - 1, start - 1)
+        if not is_valid_var_char(line[var_start]):
+            return var_start + 1
+    return start
+
+# 查找line中从下标var_end之前的变量/函数名（可能不是完整的变量or函数名，取决于var_end）
+def get_declaration_before(line, var_end):
+    temp = line[0 : var_end].strip()
+    var_start = find_declaration_start(temp, 0, len(temp))
+    if var_start >= 0:
+        return temp[var_start : len(temp)].strip()
+    else:
+        return None
+
+# 返回一个文件中定义的所有class的基本信息
+def parse_classes_in_file(src_file):
+    if DEBUG:
+        log("parse_classes_in_file: --> " + src_file)
+    f = open(src_file)         # 返回一个文件对象  
+    file_content = f.readlines()   
+    f.close()
+
+    classes = {} # class_name : class_info[parent class，annotations[]，本class开始行号，本class结束行号]
+    line_num = 0
+    package = ''
+    imports = []
+    key_package = "package "
+    key_import = "import "
+    counting_open_left_braces = [] # 当前文件中未结束的左大括号行号
+    class_names = [] # 所有未结束的class_name
+    cur_class = '' # 当前未结束的class_name
+    cur_annotations = [] # 当前未确认所属class的annotations
+    line_comment_start = -1
+    has_class_def = False
+    for line_index in range(0, len(file_content)):
+        line_num = line_index + 1
+        line = file_content[line_index]
+        if DEBUG:
+            log("==> #" + str(line_num) + " " + line)
+
+        if line.isspace(): # 空行
+            continue
+        elif line.find("/*") >= 0 and line.find("*/") < 0: # 注释块开始
+            line_comment_start = line_index
+            if DEBUG:
+                print("comment block start")
+            continue
+        elif line_comment_start >= 0 and line.find("*/") >= 0: # 注释块结束
+            line_comment_start = -1
+            if DEBUG:
+                print("comment block end")
+            continue
+        elif line_comment_start >= 0 or line.strip().startswith("//"): # 在注释块中 or 行注释
+            if DEBUG:
+                print("line comment")
+            continue
+
+        if line.startswith(key_package): # 解析包名
+            package_start = line.index(key_package) + len(key_package)
+            package_end = line.rindex(";")
+            package = line[package_start : package_end]
+        elif line.startswith(key_import): # 解析imports
+            import_start = line.index(key_import) + len(key_import)
+            import_end = line.rfind(";")
+            if import_end < 0: # 换行了
+                line_index += 1
+                next_line = file_content[line_index].strip()
+                line = line.replace("\n", "").rstrip() + next_line # 拼接
+                import_end = len(line)
+            imports.append(line[import_start : import_end])
+        else: 
+            line = get_effective_line(line)
+
+            # 解析annotation
+            if line.startswith("@"):
+                annotation = get_declaration_starting_from(line, 1)
+                cur_annotations.append(annotation)
+
+            # 解析classes
+            if line.startswith("class ") or line.find(" class ") >= 0: # 遇到class定义了
+                has_class_def = True
+                while line.find("{") < 0 and line_index < len(file_content) - 1: # 换行了
+                    line_index += 1
+                    next_line = file_content[line_index].strip()
+                    line = line.replace("\n", "").rstrip() + next_line # 拼接
+                if line.find("{") < 0: # 这不是一个class声明
+                    continue
+                cur_class = get_declaration_starting_from(line, line.find("class ") + len("class "))
+                if DEBUG:
+                    print("cur_class = " + str(cur_class))
+                if cur_class == None:
+                    continue
+                class_names.append(cur_class)
+                classes[cur_class] = ['', [], -1, -1]
+                classes[cur_class][classes_index_start_line_num] = line_num
+                # 之前未确认的annotation，就认为是本class的
+                classes[cur_class][classes_index_annotations] = cur_annotations 
+                cur_annotations = [] # 重置
+                index_extends = line.find(" extends ")
+                while index_extends > 0: # extends
+                    index_left_angle_bracket = line.find("<")
+                    index_right_angle_bracket = line.find(">")
+                    # 在<>内部的extends，不是用来修饰class的
+                    if index_left_angle_bracket < 0 or index_extends <= index_left_angle_bracket or (index_right_angle_bracket >= 0 and index_extends >= index_right_angle_bracket):
+                        parent_class = get_declaration_starting_from(line, index_extends + len(" extends "))
+                        if cur_class != '' and parent_class != None and parent_class != '':
+                            parent_import_path = parent_class
+                            if parent_class.find(".") < 0: # 查找full_path
+                                parent_import_path = find_class_import(imports, parent_class)
+                                if parent_import_path == None: # 不在imports中，那就是同一package的
+                                    parent_import_path = package + "." + parent_class
+                            classes[cur_class][classes_index_parent_class] = parent_import_path
+                    index_extends = line.find(" extends ", index_extends + len(" extends "))
+            
+            # 查找匹配的花括号
+            pop_line_num, suc = handle_curly_braces(counting_open_left_braces, line, line_num)
+            if not suc:
+                log("parse_classes_in_file: Error --> handle_curly_braces failed with " + src_file)
+            if pop_line_num >= 0: # 找到匹配的}号
+                # 如果这个}匹配了当前class的结束
+                if cur_class != '' and pop_line_num == classes[cur_class][classes_index_start_line_num]:
+                    # 则把cur_class设为上一级class
+                    classes[cur_class][classes_index_end_line_num] = line_num 
+                    if cur_class in class_names:
+                        class_names.remove(cur_class)
+                    if len(class_names) > 0:
+                        cur_class = class_names.pop()
+                    else:
+                        cur_class = ''
+    
+    if has_class_def and len(classes) <= 0:
+        log("parse_classes_in_file: Warning --> No classes found in file: " + src_file)
+    if (package + "." + cur_class) in class_info_dict:
+        log("parse_classes_in_file: Warning --> This class already exists in dict: " + (package + "." + cur_class))
+        log(", current file: " + src_file)
+        log(", previously defined in file: " + class_info_dict[package + "." + cur_class][index_src_file])
+
+    # log("imports = " + list_str(imports))
+    file_info_dict[src_file] = [package, imports, classes]
+    for cur_class in classes:
+        # log("import_path = " + package + "." + cur_class)
+        # log("parent_class = " + classes[cur_class][classes_index_parent_class])
+        if DEBUG:
+            log("class_annotations = " + list_str(classes[cur_class][classes_index_annotations]))
+        class_info_dict[package + "." + cur_class] = [src_file, cur_class, package, classes[cur_class][classes_index_parent_class], imports, classes[cur_class][classes_index_annotations], classes[cur_class][classes_index_start_line_num], classes[cur_class][classes_index_end_line_num]]
+
+# 返回处理后的内容和下一个待处理的line_index
+# @param class_path 对象obj_name对应的类引用路径
+def process_line(class_path, content, line_index, obj_name):
+    line = content[line_index]
+    line_index += 1
+    # if DEBUG:
+    print("process_line: --> #" + str(line_index) + " line = " + line.replace("\n", "") + ", obj = " + str(obj_name))
+
+    if line.isspace(): # 空行
+        return line, line_index
+    while line.find(";") < 0 or line.find("{") < 0 or line.find("}") < 0: # 本行并未结束，拼接下一行
+        if line_index >= len(content):
+            print("process_line: --> #" + str(line_index) + " line = " + line + ", len(content) = " + str(len(content)))
+            break
+        line = line + content[line_index]
+        line_index += 1
+
+    if obj_name != None: # 对象引用
+        obj_len = len(obj_name)
+        start = 0
+        occurance = 0
+        while start < len(line): # 逐个查找匹配
+            occurance = line.find(obj_name, start)
+            if occurance < 0: # 没有引用
+                return line, line_index
+            if (occurance > 0 and is_valid_var_char(line[occurance - 1])) or (occurance + obj_len < len(line) and is_valid_var_char(line[occurance + obj_len])): # 非obj引用
+                start = occurance + obj_len # 查找下一个
+                continue
+            elif occurance + obj_len < len(line) - 1 and line[occurance + obj_len] == '.': # 确实是obj方法调用
+                function_call = get_declaration_starting_from(line, occurance + obj_len + 1)
+                line = process_function_call(class_path, line, obj_name, function_call, occurance)
+                start = occurance + obj_len # 查找下一个
+                continue
+            else: # 其他obj引用
+                start = occurance + obj_len # 查找下一个
+                continue
+    else: # 本类引用，由于没有找到调用本类getter方法的地方，所以目前只处理setter方法
+        tmp = line.strip()
+        if tmp.startswith("set"):
+            start_index = line.find("set")
+            function_call = get_declaration_starting_from(line, start_index)
+            line = process_function_call(class_path, line, obj_name, function_call, start_index)
+    return line, line_index
+
+def process_function_call(class_path, line, obj_name, function_call, start_index):
+    if DEBUG:
+        print("process_function_call: --> function_call = " + str(function_call))
+    if function_call.startswith("get"): # getter调用
+        property_name = get_corresponding_property_name(function_call, "get")
+        if is_property_defined_and_not_overwritten(class_path, property_name, function_call):
+            # 替换当前的这次getter调用
+            line = replace_next_getter_call(line, start_index, obj_name, property_name, function_call)
+    elif function_call.startswith("is"): # getter调用
+        property_name = get_corresponding_property_name(function_call, "is")
+        if is_property_defined_and_not_overwritten(class_path, property_name, function_call):
+            # 替换当前的这次getter调用
+            line = replace_next_getter_call(line, start_index, obj_name, property_name, function_call)
+    elif function_call.startswith("set"): # setter调用
+        property_name = get_corresponding_property_name(function_call, "set")
+        if is_property_defined_and_not_overwritten(class_path, property_name, function_call):
+            # 替换当前的这次setter调用
+            line = replace_next_setter_call(line, start_index, obj_name, property_name, function_call)
+    else:
+        if DEBUG:
+            print("process_function_call: --> no getter or setter call")
+    return line
+
 # 修改lombok @Data定义的文件
 # @Return lombok类属性字典：属性：属性是否有重定义getter/setter
 def process_lombok_file(lombok_file, save_modification):
@@ -600,52 +646,6 @@ def process_lombok_file(lombok_file, save_modification):
         wf=open(lombok_file,'w',encoding='utf-8')  # w打开：覆盖原文件
         wf.write(content_new)
         wf.close()
-
-# 适用List的str()函数
-def list_str(obj):
-    result = ''
-    if isinstance(obj, list):
-        result += "["
-        index = 0
-        for item in obj:
-            result += str(index) + " " + list_str(item)
-            index += 1
-        result += "]"
-    else:
-        result += str(obj) + "\n"
-    return result
-
-# 查找变量声明结束的下标
-def find_declaration_end(line, var_start, end):
-    for var_end in range(var_start, end): # [var_start, end)
-        if not is_valid_var_char(line[var_end]):
-            return var_end
-    return end
-
-# 查找line中从下标var_start开始的变量/函数名（可能不是完整的变量or函数名，取决于var_start）
-def get_declaration_starting_from(line, var_start):
-    temp = line[var_start : len(line)].strip()
-    var_end = find_declaration_end(temp, 0, len(temp))
-    if var_end > 0:
-        return temp[0 : var_end].strip()
-    else:
-        return None
-
-# 查找变量声明开始的下标
-def find_declaration_start(line, start, var_end):
-    for var_start in range(var_end - 1, start - 1, -1): # [var_end - 1, start - 1)
-        if not is_valid_var_char(line[var_start]):
-            return var_start + 1
-    return start
-
-# 查找line中从下标var_end之前的变量/函数名（可能不是完整的变量or函数名，取决于var_end）
-def get_declaration_before(line, var_end):
-    temp = line[0 : var_end].strip()
-    var_start = find_declaration_start(temp, 0, len(temp))
-    if var_start >= 0:
-        return temp[var_start : len(temp)].strip()
-    else:
-        return None
 
 # 处理引用lombok的文件
 # @param is_same_package 是否为同一个package下的，同一package不需要import
