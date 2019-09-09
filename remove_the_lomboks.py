@@ -40,10 +40,11 @@ class_props_and_funcs_dict = {}
 class_index_properties = 0
 class_index_functions = 1
 
+EXIT_ON_ERROR = True
 FILE_LOG = True
 time_str = time.strftime('%Y-%m-%d_%H_%M_%S', time.localtime())
 LOG_FILE_NAME = 'remove_lomboks_' + time_str + '.log'
-MAX_TOTAL_COUNT = 10 # 处理的文件数上限（可能会超过一点），负数表示无上限
+MAX_TOTAL_COUNT = 20 # 处理的文件数上限（可能会超过一点），负数表示无上限
 
 #### 命令行可控制的选项们 ####
 SAVE_MODIFICATION = False # 保存文件修改
@@ -84,19 +85,20 @@ def all_filtered_files(dirname, pass_filter, fail_filter):
 
 # 返回一行中的有效内容
 def get_effective_line(line):
+    line = line.replace('\n', '') # 换行会影响正则替换
     # if DEBUG:
     #     log("get_effective_line ==> " + line)
     # 先去掉注释和引用中的内容
     # 去掉注释块/* */之间的内容（e.g. 替换"/*...*/" 为 ""）
     line = re.sub(r'(/\*.*\*/)+', "", line) 
-    # 去掉转义双引号之间的内容（e.g. 替换"a = \"abc\";" 为 "a = '';"）
-    line = re.sub(r'(\\"[^"\']*\\")+', "''", line) 
+    # 去掉单引号中的转义单引号（e.g. 替换"a = '\'';" 为 "a = '';"）
+    line = re.sub(r'(\'\\\'*\')+', "''", line) 
+    # 去掉双引号中的转义双引号（e.g. 替换"a = "\"";" 为 "a = "";"）
+    line = re.sub(r'("\\"*")+', "\"\"", line) 
     # 去掉双引号之间的内容（e.g. 替换 a = "abc" 为 a = ""）
-    line = re.sub(r'("[^"\']*")+', "\"\"", line) 
-    # 去掉转义单引号之间的内容（e.g. 替换'a = \'abc\';' 为 'a = "";'）
-    line = re.sub(r'(\\\'[^"\']*\\\')+', "\"\"", line)     
+    line = re.sub(r'("[^"]*")+', "\"\"", line)  
     # 去掉单引号之间的内容（e.g. 替换 a = 'abc' 为 a = ''）
-    line = re.sub(r'(\'[^"\']*\')+', "''", line)
+    line = re.sub(r'(\'[^\']*\')+', "''", line)
     # if DEBUG:
     #     log("get_effective_line --> " + line)
     return line
@@ -143,7 +145,10 @@ def find_class_import(imports, the_class):
 def filter_dict_items(data_dict, filter_indices, filter_values):
     if len(filter_indices) != len(filter_values):
         log("filter_dict_items: Error --> Indices and values should have the same length!")
-        return None
+        if EXIT_ON_ERROR:
+            exit(0)
+        else:
+            return None
     result = []
     for key, value in data_dict.items():
         index = 0
@@ -201,7 +206,10 @@ def replace_next_setter_call(line, start_index, obj_name, property_name, functio
     if index_close_parenthesis < 0: # 找不到匹配的一对括号
         log("replace_next_setter_call: Error --> Can't find matching parenthesis " + str(index_open_parenthesis))
         print_line(line)
-        return line
+        if EXIT_ON_ERROR:
+            exit(0)
+        else:
+            return line
     else:
         # 先去掉结尾的)号
         part_2 = part_2[0 : index_close_parenthesis] + part_2[index_close_parenthesis + 1 : len(part_2)]
@@ -233,7 +241,10 @@ def find_matching_close_parenthesis(line, index_open_parenthesis):
 def has_property_or_function(class_path, type_index, value):
     if class_path not in class_props_and_funcs_dict:
         log("has_property_or_function: Error --> Class info doesn't exist in dict: " + class_path)
-        return False
+        if EXIT_ON_ERROR:
+            exit(0)
+        else:
+            return False
     return value in class_props_and_funcs_dict[class_path][type_index]
 
 def has_property_or_function_including_parents(class_path, type_index, value):
@@ -242,6 +253,12 @@ def has_property_or_function_including_parents(class_path, type_index, value):
     if has_property_or_function(class_path, type_index, value): # 当前类
         has_property = True
     else: # 逐级查找父类
+        if class_path not in class_info_dict:
+            log("has_property_or_function_including_parents: Error --> Class info doesn't exist in dict: " + class_path)
+            if EXIT_ON_ERROR:
+                exit(0)
+            else:
+                return has_property
         current = class_info_dict[class_path][index_parent_import_path]
         if DEBUG:
             print("has_property_or_function_including_parents: --> next parent: " + str(current))
@@ -249,6 +266,12 @@ def has_property_or_function_including_parents(class_path, type_index, value):
             if has_property_or_function(current, type_index, value):
                 has_property = True
                 break
+            if current not in class_info_dict:
+                log("has_property_or_function_including_parents: Error --> Class info doesn't exist in dict: " + class_path)
+                if EXIT_ON_ERROR:
+                    exit(0)
+                else:
+                    return has_property
             current = class_info_dict[current][index_parent_import_path]
     return has_property
 
@@ -319,6 +342,7 @@ def parse_class_proterties_and_functions(class_path, class_info):
         # 去掉注释块和引用中的内容
         line = get_effective_line(line)
         if DEBUG:
+            print("parse_class_proterties_and_functions: --> ")
             print_line(line, line_index)
 
         open_brace_count += len(re.findall(r'{', line))
@@ -419,7 +443,10 @@ def get_next_line(content, line_index, strip = False):
                 if line_index >= len(content): # 文件结束了还没遇到结束符
                     log("process_line: Error --> file_length = " + str(len(content)))
                     print_line(line, line_index, True)
-                    break
+                    if EXIT_ON_ERROR:
+                        exit(0)
+                    else:
+                        break
                 if strip:
                     line = line.strip() + content[line_index].strip()
                 else:
@@ -436,7 +463,10 @@ def get_next_line(content, line_index, strip = False):
         if line_index >= len(content): # 文件结束了还没遇到结束符
             log("process_line: Error --> file_length = " + str(len(content)))
             print_line(line, line_index, True)
-            break
+            if EXIT_ON_ERROR:
+                exit(0)
+            else:
+                break
         if strip:
             line = line.strip() + content[line_index].strip()
         else:
@@ -487,7 +517,7 @@ def parse_classes_in_file(src_file):
                 print("comment block start")
             line_index += 1
             continue
-        elif line_comment_start >= 0 and line.find("*/") >= 0: # 注释块结束
+        elif line_comment_start >= 0 and line.find("*/") >= 0 and line.find("/*") < 0: # 注释块结束
             line_comment_start = -1
             if DEBUG:
                 print("comment block end")
@@ -557,6 +587,8 @@ def parse_classes_in_file(src_file):
             pop_line_num, suc = handle_curly_braces(counting_open_left_braces, line, line_num)
             if not suc:
                 log("parse_classes_in_file: Error --> handle_curly_braces failed with " + src_file)
+                if EXIT_ON_ERROR:
+                    exit(0)
             if pop_line_num >= 0: # 找到匹配的}号
                 # 如果这个}匹配了当前class的结束
                 if cur_class != '' and pop_line_num == classes[cur_class][classes_index_start_line_num]:
@@ -745,9 +777,12 @@ def process_lombok_referred_file(lombok_class_name, lombok_import_path, is_same_
         line = get_effective_line(line)
         if line.startswith("class ") or line.find(" class ") >= 0: # 遇到class定义了
             continue
+
         if line.find(lombok_class_name) >= 0 and line.find("import " + lombok_import_path) < 0: # 非import的class引用
             ref_count = ref_count + 1
-        if line.find(" " + lombok_class_name + " ") >= 0 or line.strip().startswith(lombok_class_name + " "): # 变量声明
+
+        class_ref_index = line.find(lombok_class_name + " ")
+        if class_ref_index == 0 or (class_ref_index > 0 and is_valid_var_char(line[class_ref_index - 1]) == False): # 变量声明
             var_start = line.find(lombok_class_name) + len(lombok_class_name) + 1 # 假定class name和var name中间只有一个空格
             obj_name = get_declaration_starting_from(line, var_start)
             if obj_name != None:
@@ -845,6 +880,14 @@ if __name__=='__main__':
 
     if SINGLE_FILE:
         parse_classes_in_file(directory)
+
+        all_lombok_classes = filter_dict_items(class_info_dict, [index_imports, index_class_annotations], [LOMBOK_IMPORT_Data, LOMBOK_ANNOTATION_Data])
+        log("main: --> Scaned " + str(len(all_lombok_classes)) + " lombok classes.")
+        # log(list_str(all_lombok_classes))
+
+        # 初始化lombok属性、方法表
+        for lombok_class in all_lombok_classes:
+            parse_class_proterties_and_functions(lombok_class, class_info_dict[lombok_class])
     else:
         # 获取所有的java文件
         all_java_files = all_filtered_files(directory, pass_filter, fail_filter) # 从命令行接收一个输入作为路径，获取
@@ -872,10 +915,12 @@ if __name__=='__main__':
         total_count = 0 # 处理的总文件数
 
         # 处理lombok文件
+        lombok_files_processed = []
         for lombok_file in all_lombok_files:
             process_lombok_file(lombok_file, save_modification=SAVE_MODIFICATION) 
             log("main: --> Finish process lombok file: " + lombok_file)
             total_count += 1
+            lombok_files_processed.append(lombok_file)
 
             classes_defined = file_info_dict[lombok_file][file_index_classes]
             # 处理引用lombok类的文件
@@ -906,6 +951,8 @@ if __name__=='__main__':
                 log("main: --> Finish process " + str(count) + " file(s) that refer " + lombok_class + "\n")
 
             if MAX_TOTAL_COUNT > 0 and total_count >= MAX_TOTAL_COUNT:
+                log("main: --> lombok_files_processed: " + list_str(lombok_files_processed))
                 log("main: --> Done processing " + str(total_count) + " files.\n")
                 exit(0)
+        log("main: --> lombok_files_processed: " + list_str(lombok_files_processed))
         log("main: --> Done processing " + str(total_count) + " files.\n")
