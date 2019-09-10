@@ -805,7 +805,7 @@ def process_lombok_referred_file(lombok_class_name, lombok_import_path, is_same_
                 print_line(line, line_num, True)
                 if obj_name not in obj_list:
                     obj_list.append(obj_name) 
-            class_ref_index = line.find(lombok_class_name + " ", var_start + len(obj_name))
+            class_ref_index = line.find(lombok_class_name + " ", var_start + len(lombok_class_name) + 1 + len(obj_name))
                     
     log("process_lombok_referred_file: --> obj_list = " + str(obj_list))
     # 如果没有找到引用，直接删除import语句，或结束
