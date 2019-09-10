@@ -44,7 +44,7 @@ EXIT_ON_ERROR = True
 FILE_LOG = True
 time_str = time.strftime('%Y-%m-%d_%H_%M_%S', time.localtime())
 LOG_FILE_NAME = 'remove_lomboks_' + time_str + '.log'
-MAX_TOTAL_COUNT = 20 # 处理的文件数上限（可能会超过一点），负数表示无上限
+MAX_TOTAL_COUNT = 1000 # 处理的文件数上限（可能会超过一点），负数表示无上限
 
 #### 命令行可控制的选项们 ####
 SAVE_MODIFICATION = False # 保存文件修改
@@ -179,6 +179,8 @@ def is_valid_var_char(c, exceptions = '_'):
 
 def get_corresponding_property_name(function_call, prefix):
     property_name = get_declaration_starting_from(function_call, len(prefix))
+    if property_name == None:
+        return None
     property_name = property_name[0].lower() + property_name[1 : len(property_name)]
     return property_name
 
@@ -276,6 +278,10 @@ def has_property_or_function_including_parents(class_path, type_index, value):
     return has_property
 
 def is_property_defined_and_not_overwritten(class_path, property_name, function_call):
+    if property_name == None:
+        if DEBUG:
+            print("is_property_defined_and_not_overwritten: --> property_name = None")
+        return False
     # 检查该属性是否有定义
     if not has_property_or_function_including_parents(class_path, class_index_properties, property_name):
         if DEBUG:
@@ -441,7 +447,7 @@ def get_next_line(content, line_index, strip = False):
         if line.find("(") > 0: # 带参数
             while line.find(")") < 0: 
                 if line_index >= len(content): # 文件结束了还没遇到结束符
-                    log("process_line: Error --> file_length = " + str(len(content)))
+                    log("get_next_line: Error --> file_length = " + str(len(content)))
                     print_line(line, line_index, True)
                     if EXIT_ON_ERROR:
                         exit(0)
@@ -461,7 +467,7 @@ def get_next_line(content, line_index, strip = False):
     tmp = get_effective_line(line)
     while tmp.find(";") < 0 and tmp.find("{") < 0 and tmp.find("}") < 0: # 本行并未结束，拼接下一行
         if line_index >= len(content): # 文件结束了还没遇到结束符
-            log("process_line: Error --> file_length = " + str(len(content)))
+            log("get_next_line: Error --> file_length = " + str(len(content)))
             print_line(line, line_index, True)
             if EXIT_ON_ERROR:
                 exit(0)
@@ -619,12 +625,10 @@ def parse_classes_in_file(src_file):
 
 # 返回处理后的内容和下一个待处理的line_index
 # @param class_path 对象obj_name对应的类引用路径
-def process_line(class_path, content, line_index, obj_name):
-    line, line_index = get_next_line(content, line_index)
+def process_line(class_path, line, obj_name):
     if DEBUG:
-        print("process_line: --> obj = " + str(obj_name))
-        print("process_line: --> class_path = " + str(class_path))
-        print_line(line, line_index)
+        print("process_line: --> line = " + str(line))
+        print("process_line: --> obj_name = " + str(obj_name))
 
     if obj_name != None: # 对象引用
         obj_len = len(obj_name)
@@ -635,8 +639,8 @@ def process_line(class_path, content, line_index, obj_name):
             if occurance < 0: # 没有引用
                 if DEBUG and start == 0:
                     print("process_line: --> no reference in current line")
-                    print_line(line, line_index)
-                return line, line_index
+                    print_line(line)
+                return line
             if (occurance > 0 and is_valid_var_char(line[occurance - 1])) or (occurance + obj_len < len(line) and is_valid_var_char(line[occurance + obj_len])): # 非obj引用
                 start = occurance + obj_len # 查找下一个
                 continue
@@ -656,12 +660,12 @@ def process_line(class_path, content, line_index, obj_name):
             line = process_function_call(class_path, line, obj_name, function_call, start_index)
     if DEBUG:
         print("process_line: --> result: ")
-        print_line(line, line_index)
-    return line, line_index
+        print_line(line)
+    return line
 
 def process_function_call(class_path, line, obj_name, function_call, start_index):
     if DEBUG:
-        print("process_function_call: --> function_call = " + str(function_call))
+        print("process_function_call: --> function_call = " + str(function_call) + ", start_index = " + str(start_index))
     if function_call.startswith("get"): # getter调用
         property_name = get_corresponding_property_name(function_call, "get")
         if is_property_defined_and_not_overwritten(class_path, property_name, function_call):
@@ -680,6 +684,8 @@ def process_function_call(class_path, line, obj_name, function_call, start_index
     else:
         if DEBUG:
             print("process_function_call: --> no getter or setter call")
+    if DEBUG:
+        print("process_function_call: --> line = " + line)
     return line
 
 # 修改lombok @Data定义的文件
@@ -715,7 +721,7 @@ def process_lombok_file(lombok_file, save_modification):
             content_new += line
             line_index += 1
             continue
-        elif line_comment_start >= 0 or line.strip().startswith("//"): # 在注释块中 or 行注释
+        elif line_comment_start >= 0 or line.strip().startswith("//") or (line.find("/*") >= 0 and line.find("*/") > line.find("/*")): # 在注释块中 or 行注释
             # if DEBUG:
             #     print("line comment")
             content_new += line
@@ -747,7 +753,8 @@ def process_lombok_file(lombok_file, save_modification):
             # 处理可能的setter/getter替换
             else:
                 class_path = file_info_dict[lombok_file][file_index_package] + "." + lombok_class_name
-                line, line_index = process_line(class_path, content, line_index, None)
+                line, line_index = get_next_line(content, line_index)
+                line = process_line(class_path, line, None)
                 content_new += line
     # if DEBUG:
     #     print("\n\n")
@@ -844,16 +851,13 @@ def process_lombok_referred_file(lombok_class_name, lombok_import_path, is_same_
                 line_index += 1
                 continue      
 
-            tmp_index = line_index
+            line, line_index = get_next_line(content, line_index)
             for obj_name in obj_list:
-                line, tmp = process_line(lombok_import_path, content, line_index, obj_name)
-                if tmp > tmp_index:
-                    tmp_index = tmp
+                line = process_line(lombok_import_path, line, obj_name)
             # if DEBUG:
             #     print_line(line, line_num)
 
             content_new += line  
-            line_index = tmp_index  
 
     if save_modification:
         # 把修改后的内容写入文件
