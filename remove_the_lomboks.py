@@ -750,6 +750,14 @@ def process_lombok_file(lombok_file, save_modification):
                     print_line(line, line_num)
                 content_new += line
                 line_index += 1
+            # 替换属性定义（而非方法定义）的protected为public
+            elif line.find("protected ") >= 0 and line.find("(") < 0: 
+                line = line.replace("protected ", "public ")
+                if DEBUG:
+                    print("process_lombok_file: --> replace protected")
+                    print_line(line, line_num)
+                content_new += line
+                line_index += 1
             # 处理可能的setter/getter替换
             else:
                 class_path = file_info_dict[lombok_file][file_index_package] + "." + lombok_class_name
@@ -789,7 +797,7 @@ def process_lombok_referred_file(lombok_class_name, lombok_import_path, is_same_
             ref_count = ref_count + 1
 
         class_ref_index = line.find(lombok_class_name + " ")
-        if class_ref_index == 0 or (class_ref_index > 0 and is_valid_var_char(line[class_ref_index - 1]) == False): # 变量声明
+        while class_ref_index == 0 or (class_ref_index > 0 and is_valid_var_char(line[class_ref_index - 1]) == False): # 变量声明
             var_start = line.find(lombok_class_name) + len(lombok_class_name) + 1 # 假定class name和var name中间只有一个空格
             obj_name = get_declaration_starting_from(line, var_start)
             if obj_name != None:
@@ -797,6 +805,7 @@ def process_lombok_referred_file(lombok_class_name, lombok_import_path, is_same_
                 print_line(line, line_num, True)
                 if obj_name not in obj_list:
                     obj_list.append(obj_name) 
+            class_ref_index = line.find(lombok_class_name + " ", var_start + len(obj_name))
                     
     log("process_lombok_referred_file: --> obj_list = " + str(obj_list))
     # 如果没有找到引用，直接删除import语句，或结束
